@@ -1,12 +1,15 @@
-from flask import Flask, request, render_template, jsonify, send_from_directory
-import cv2 # type: ignore
+from flask import Flask, request, render_template, jsonify
+import cv2  # type: ignore
 import random
-import requests # type: ignore
 import os
+import tempfile
 from werkzeug.utils import secure_filename
+from gradio_client import Client
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = '/tmp'  # Папка для временного хранения файлов
+
+# Создает экземпляр клиента Gradio, указывая URL к Hugging Face Space
+gradio_client = Client("https://tonyassi-image-story-teller.hf.space/--replicas/liw84/")
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -18,12 +21,11 @@ def index():
         if file.filename == '':
             return "Файл не выбран", 400
         if file:
-            # Сохраняет видео файл
-            filename = secure_filename(file.filename)
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(filepath)
+            # Создает временный файл для видео
+            temp_video = tempfile.NamedTemporaryFile(delete=False)
+            file.save(temp_video.name)
             # Извлекает случайный кадр
-            cap = cv2.VideoCapture(filepath)
+            cap = cv2.VideoCapture(temp_video.name)
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             random_frame = random.randint(0, frame_count - 1)
             cap.set(cv2.CAP_PROP_POS_FRAMES, random_frame)
@@ -31,23 +33,26 @@ def index():
             cap.release()
 
             if success:
-                # Сохраняет кадр во временный файл
-                temp_image_path = os.path.join(app.config['UPLOAD_FOLDER'], 'frame.jpg')
-                cv2.imwrite(temp_image_path, frame)
+                # Создает временный файл для кадра
+                temp_image = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+                cv2.imwrite(temp_image.name, frame)
 
-                # Отправляет изображение на модель Hugging Face
-                with open(temp_image_path, 'rb') as f:
-                    response = requests.post(
-                        'https://huggingface.co/spaces/tonyassi/image-story-teller',
-                        files={'file': f}
+                # Отправляет изображение на модель Hugging Face с помощью клиента Gradio
+                with open(temp_image.name, 'rb') as f:
+                    result = gradio_client.predict(
+                        files={"file": f},
+                        api_name="/predict"
                     )
 
-                if response.status_code == 200:
-                    # Возвращает результат пользователю
-                    return jsonify(response.json())
-                else:
-                    return "Ошибка при запросе к API модели", 500
+                # Удаляет временные файлы
+                os.unlink(temp_video.name)
+                os.unlink(temp_image.name)
+
+                # Возвращает результат пользователю
+                return jsonify(result)
             else:
+                # Удаляет временный файл видео, если не удалось извлечь кадр
+                os.unlink(temp_video.name)
                 return "Ошибка при извлечении кадра из видео", 500
         else:
             return "Ошибка загрузки файла", 400
