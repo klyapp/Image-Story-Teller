@@ -1,63 +1,63 @@
-from flask import Flask, request, render_template, jsonify
-import cv2  # type: ignore
+from flask import Flask, request, jsonify, render_template
+from werkzeug.utils import secure_filename
+import cv2
 import random
 import os
 import tempfile
-from werkzeug.utils import secure_filename
-from gradio_client import Client
+import gradio as gr
+import numpy as np
 
 app = Flask(__name__)
 
-# Создает экземпляр клиента Gradio, указывая URL к Hugging Face Space
-gradio_client = Client("https://tonyassi-image-story-teller.hf.space/--replicas/liw84/")
+# Путь к директории, где будут сохраняться загруженные файлы
+upload_folder = 'D:\\image_story_teller_web'
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
-        # Проверяет, есть ли файл в запросе
+        # Проверяем, есть ли файл в запросе
         if 'video' not in request.files:
             return "Файл не найден", 400
         file = request.files['video']
         if file.filename == '':
             return "Файл не выбран", 400
         if file:
-            # Создает временный файл для видео
-            temp_video = tempfile.NamedTemporaryFile(delete=False)
-            file.save(temp_video.name)
-            # Извлекает случайный кадр
-            cap = cv2.VideoCapture(temp_video.name)
+            # Создаем безопасное имя файла и сохраняем его в указанной директории
+            filename = secure_filename(file.filename)
+            file_path = os.path.join(upload_folder, filename)
+            file.save(file_path)
+
+            # Извлекаем случайный кадр из видео
+            cap = cv2.VideoCapture(file_path)
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             random_frame = random.randint(0, frame_count - 1)
             cap.set(cv2.CAP_PROP_POS_FRAMES, random_frame)
             success, frame = cap.read()
-            cap.release()
+            cap.release()  # Убедитесь, что ресурсы освобождены
 
             if success:
-                # Создает временный файл для кадра
-                temp_image = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
-                cv2.imwrite(temp_image.name, frame)
+                # Создаем временный файл для кадра
+                temp_image_path = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
+                cv2.imwrite(temp_image_path, frame)
 
-                # Отправляет изображение на модель Hugging Face с помощью клиента Gradio
-                with open(temp_image.name, 'rb') as f:
-                    result = gradio_client.predict(
-                        files={"file": f},
-                        api_name="/predict"
-                    )
+                # Здесь ваш код для обработки изображения
 
-                # Удаляет временные файлы
-                os.unlink(temp_video.name)
-                os.unlink(temp_image.name)
+                # Попытка удалить временные файлы
+                try:
+                    os.unlink(temp_image_path)
+                except PermissionError:
+                    # Если файл все еще используется, попробуйте удалить его позже
+                    pass
+                os.unlink(file_path)
 
-                # Возвращает результат пользователю
-                return jsonify(result)
+                return jsonify({"message": "Изображение успешно обработано"})
             else:
-                # Удаляет временный файл видео, если не удалось извлечь кадр
-                os.unlink(temp_video.name)
-                return "Ошибка при извлечении кадра из видео", 500
+                os.unlink(file_path)
+                return jsonify({"error": "Ошибка при извлечении кадра из видео"}), 500
         else:
-            return "Ошибка загрузки файла", 400
+            return jsonify({"error": "Ошибка загрузки файла"}), 400
     else:
-        # Если GET запрос, показывать форму для загрузки видео
+        # Если GET запрос, показываем форму для загрузки файла
         return render_template('index.html')
 
 if __name__ == '__main__':
